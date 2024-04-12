@@ -61,6 +61,7 @@ def get_workspace() -> torch.Tensor:
     return _cublas_workspace
 
 
+# CTC: userbuffer initialization
 def initialize_ub(
     shape: list,
     tp_size: int,
@@ -79,6 +80,7 @@ def initialize_ub(
     _cublas_workspace = get_workspace().repeat(_NUM_MAX_UB_STREAMS)
 
     # Default buffer precision: AllGather buffers use fp8 when using fp8 recipe
+    # CTC: all overlap options. For CPL/RPL FW/BW.
     layers_all_gather_overlap = [
         "qkv_fprop", "qkv_dgrad", "proj_dgrad", "fc1_fprop", "fc1_dgrad", "fc2_dgrad"
     ]
@@ -119,6 +121,7 @@ def initialize_ub(
             warnings.warn(
                 "Atomic GEMM uses a beta API from cublas and is not tested for all use cases."
             )
+            # CTC: atomic GEMM is only supported for FP8 GEMM
             assert use_fp8, "Atomic GEMM overlap supported only for FP8 GEMM."
             if method == 'bulk':
                 warnings.warn(
@@ -154,6 +157,7 @@ def initialize_ub(
             dtype=torch.uint8 if (use_fp8 and fp8_buf) else dtype,
             device='cuda')
         if method == 'ring_exchange':
+            # CTC: only ringexchange cases use `p2p` overlap
             ub_obj = tex.UbufP2PCommOverlap(
                     sample_buffer,          # Sample userbuffer
                     rank_id,                # Rank id

@@ -38,6 +38,7 @@ namespace ubuf {
 
 enum class COMM_TYPE { RS = 0, AG = 1 };
 
+// CTC: overlap algos.
 enum class UBOverlapAlgo {
   BULK_OVERLAP_AG = 0,
   BULK_OVERLAP_RS = 1,
@@ -137,6 +138,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
   ** Bulk GEMM + COMM
   ** This function assumes the communication input is pre-copied to _ubuf
   */
+  // CTC: bulk_overlap
   std::vector<at::Tensor>
   bulk_overlap(at::Tensor A, at::Tensor A_scale_inverse, int64_t A_fp8_tensor,
                transformer_engine::DType A_type, bool transa, at::Tensor B,
@@ -317,6 +319,7 @@ struct UbufCommOverlap : torch::CustomClassHolder, UbufBase {
   /*
   ** Split FPROP GEMM + ReduceScatter
   */
+  // CTC: split gemm and rs to overlap
   void split_overlap_rs(at::Tensor A, at::Tensor A_scale_inverse, int64_t A_fp8_tensor,
                         transformer_engine::DType A_type, bool transa, at::Tensor B,
                         at::Tensor B_scale_inverse, int64_t B_fp8_tensor,
@@ -766,6 +769,7 @@ struct UbufP2PCommOverlap : torch::CustomClassHolder, UbufBase {
   ** in each rank to be in the contiguous memory space after all ring exchange
   *phases.
   */
+  // CTC: split ag and gemm by p2p ringexchange to overlap, two types: initial exchange(aggregate2) and regular ring exchange.
   torch::Tensor split_overlap_ag(at::Tensor A, at::Tensor A_scale_inverse, int64_t A_fp8_tensor,
                                  transformer_engine::DType A_type, bool transa, at::Tensor B,
                                  at::Tensor B_scale_inverse, int64_t B_fp8_tensor,
@@ -1025,6 +1029,7 @@ struct UbufP2PCommOverlap : torch::CustomClassHolder, UbufBase {
   /*
   ** Split ReduceScatter + GEMM using P2P communication
   */
+  // CTC: any use case of p2p overlap rs+gemm? and how this actually work? TODO: understand this.
   void split_overlap_rs(at::Tensor A, at::Tensor A_scale_inverse, int64_t A_fp8_tensor,
                         transformer_engine::DType A_type, bool transa, at::Tensor B,
                         at::Tensor B_scale_inverse, int64_t B_fp8_tensor,

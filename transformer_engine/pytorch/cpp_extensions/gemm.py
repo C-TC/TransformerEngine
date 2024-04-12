@@ -225,6 +225,7 @@ def gemm(
         accumulate,
         False,  # use_split_accumulator
     )
+    # CTC: multiple algorithms for GEMM, for different overlap scenarios
     fn = torch.ops.tex_ts.te_gemm_ts
     if ub_algo is not None:
         assert ub is not None, 'ub object is None!'

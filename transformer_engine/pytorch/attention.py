@@ -429,6 +429,7 @@ class UnpackTensor(torch.autograd.Function):
         return None, None, pack_tensor(ctx.indices, grad_output)
 
 
+# CTC: p2p comm for ring attention in CP
 def flash_attn_p2p_communicate(rank, send_tensor, send_dst,
                                recv_tensor, recv_src,
                                cp_group, batch_p2p_comm):
@@ -516,6 +517,7 @@ class AttnFuncWithCP(torch.autograd.Function):
         causal = (attn_mask_type == "causal")
 
         if causal:
+            # CTC: why partition sequence dim by 2?
             # [b, s, np, hn] -> [b, 2, s//2, np, hn]
             q, k, v = [x.view(x.shape[0], 2, x.shape[1]//2, *x.shape[2:]) for x in [q, k, v]]
         assert(q.shape[-1] % 8 == 0), "hidden size per attention head should be multiple of 8"
@@ -529,6 +531,7 @@ class AttnFuncWithCP(torch.autograd.Function):
         q_inputs = [None, None]
         kv_inputs = [None, None]
         # Flash Attn outputs
+        # CTC: store outputs of each step, would not that a waste of memory?
         out_per_step = [None for _ in range(cp_size)]
         softmax_lse_per_step = [None for _ in range(cp_size)]
         rng_states = [None for _ in range(cp_size)]
@@ -538,6 +541,7 @@ class AttnFuncWithCP(torch.autograd.Function):
         # synchronize fwd results correction across steps
         fwd_results_correction_done = torch.cuda.Event()
 
+        # CTC: store p2p_comm_buffers of each step, would not that a waste of memory?
         p2p_comm_buffers = [None for _ in range(cp_size)]
         p2p_comm_buffers[0] = torch.cat((k.unsqueeze(0), v.unsqueeze(0)), dim=0)
         send_recv_reqs = [[], []]
@@ -549,6 +553,7 @@ class AttnFuncWithCP(torch.autograd.Function):
                     for req in send_recv_reqs[(i+1)%2]:
                         req.wait()
 
+                    # CTC: async send/recv of KV
                     if i < (cp_size-1):
                         p2p_comm_buffers[i+1] = torch.empty_like(p2p_comm_buffers[i])
                         send_recv_reqs[i%2] = flash_attn_p2p_communicate(rank,
@@ -560,8 +565,11 @@ class AttnFuncWithCP(torch.autograd.Function):
                                                                          batch_p2p_comm)
 
                     kv_inputs[i%2] = p2p_comm_buffers[i]
+                    # CTC: causal case
                     if causal:
                         if i == 0:
+                            # CTC: first round is causal mask.
+                            # CTC: fused attention is traditional attention with some fusion provided by CuDNN?
                             if use_fused_attention:
                                 # [b, 2, sq//2, np, hn] -> [b, sq, np, hn]
                                 q_inputs[i%2] = q.view(q.shape[0], -1, *q.shape[-2:])
@@ -578,6 +586,7 @@ class AttnFuncWithCP(torch.autograd.Function):
                                     qkv_layout="bshd_bshd_bshd", attn_mask_type="causal",
                                 )
                             else:
+                                # CTC: full sequence length for q,k,v
                                 # [b, 2, sq//2, np, hn] -> [b*sq, np, hn]
                                 q_inputs[i%2] = q.view(-1, *q.shape[-2:])
                                 # [2, b, 2, sk//2, np, hn] -> [2, b*sk, np, hn]
@@ -605,6 +614,7 @@ class AttnFuncWithCP(torch.autograd.Function):
                                     qkv_layout="bshd_bshd_bshd", attn_mask_type="no_mask",
                                 )
                             else:
+                                # CTC: full sequence length for q, half sequence length for k,v
                                 # [b, 2, sq//2, np, hn] -> [b*sq, np, hn]
                                 q_inputs[i%2] = q.view(-1, *q.shape[-2:])
                                 # [2, b, 2, sk//2, np, hn] -> [2, b, sk//2, np, hn]
@@ -637,6 +647,8 @@ class AttnFuncWithCP(torch.autograd.Function):
                                     qkv_layout="bshd_bshd_bshd", attn_mask_type="no_mask",
                                 )
                             else:
+                                # CTC: half sequence length for q, full sequence length for k,v
+                                # CTC: the intentions seems to be work balancing, but will this give correct output? So what is q,k,v input, already reordered?
                                 # [b, 2, sq//2, np, hn] -> [b, sq//2, np, hn] -> [b*sq//2, np, hn]
                                 q_inputs[i%2] = q[:, 1, ...].contiguous().view(-1, *q.shape[-2:])
                                 # [2, b, 2, sk//2, np, hn] -> [2, b*sk, np, hn]
@@ -650,6 +662,7 @@ class AttnFuncWithCP(torch.autograd.Function):
                                     dropout_p, softmax_scale, causal=False, return_softmax=False,
                                     **fa_optional_forward_kwargs
                                 )
+                    # CTC: full attention mask case
                     else:
                         if use_fused_attention:
                             out_per_step[i], [softmax_lse_per_step[i], rng_states[i]] = \
@@ -684,6 +697,7 @@ class AttnFuncWithCP(torch.autograd.Function):
                     softmax_lse_per_step[i-1].squeeze_(-1)
 
                 with torch.cuda.stream(flash_attn_streams[(i-1)%2]):
+                    # CTC: update softmax stats
                     if i == 1:
                         out = torch.empty_like(q).zero_()
                         softmax_lse = torch.clone(softmax_lse_per_step[0]).to(torch.double)
@@ -702,12 +716,14 @@ class AttnFuncWithCP(torch.autograd.Function):
                 if i < cp_size:
                     flash_attn_streams[(i-1)%2].record_event(fwd_results_correction_done)
 
+        # CTC: synchronizing.
         torch.cuda.current_stream().wait_stream(flash_attn_streams[1])
 
         softmax_lse = softmax_lse.to(torch.float)
         for i in range(cp_size):
             # [b*sq, np, hn] -> [b, sq, np, hn] or [b*sq//2, np, hn] -> [b, sq//2, np, hn]
             out_ = out_per_step[i].view(out.shape[0], -1, *out.shape[-2:])
+            # CTC: rescaling part.
             if i <= rank or not causal:
                 flash_attn_fwd_out_correction(out.view(*out_.shape),
                                               out_,
@@ -1729,6 +1745,7 @@ class FlashAttention(torch.nn.Module):
             max_seqlen_q, max_seqlen_kv = query_layer.shape[1], key_layer.shape[1]
             if not context_parallel:
                 # [b * s, h, d]
+                # CTC: nothing special reordering done to q,k,v, how to explain the seq len halfing in attn with cp?
                 query_layer, key_layer, value_layer = [
                     x.view(x.shape[0] * x.shape[1], *x.shape[2:])
                     for x in [query_layer, key_layer, value_layer]
@@ -2533,6 +2550,7 @@ class DotProductAttention(torch.nn.Module):
         fast_zero_fill: bool = True,
         inference_params: Optional[InferenceParams] = None,
     ) -> torch.Tensor:
+        # CTC: here's some explanation of fused attention
         """
         Dot Product Attention Layer.
 

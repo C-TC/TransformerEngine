@@ -448,6 +448,7 @@ class _LayerNormLinear(torch.autograd.Function):
                 dim_size[1] = weight.size(1)
                 rs_out = torch.empty(
                         dim_size, dtype=ctx.activation_dtype, device=grad_output.device)
+                # CTC: atomic overlap only for fp8
                 if ub_obj_dgrad.is_p2p_overlap():
                     if ctx.fp8 and ub_obj_dgrad.is_atomic_gemm():
                         ub_algo=tex.UbufOverlapAlgo.ATOMIC_GEMM_RS_P2P
@@ -832,6 +833,7 @@ class LayerNormLinear(TransformerEngineBaseModule):
         self.ub_bulk_dgrad = ub_bulk_dgrad
         self.ub_overlap_ag = ub_overlap_ag
         self.ub_overlap_rs_dgrad = ub_overlap_rs_dgrad
+        # CTC: user buffer is needed for tp overlap.
         if any([ub_bulk_wgrad, ub_bulk_dgrad, ub_overlap_ag, ub_overlap_rs_dgrad]):
             assert ub_name is not None, "Userbuffer name [string] is not set."
         self.ub_name = ub_name
@@ -993,6 +995,7 @@ class LayerNormLinear(TransformerEngineBaseModule):
         else:
             self.gemm_bias_unfused_add = False
 
+        # CTC: prevent LN kernels from using all SMs in the device, for overlap? Why, how?
         # These many SMs are subtracted from the total SM count when calling forward
         # and backward LayerNorm C APIs. These envvars can be used to prevent the LN
         # kernels from using all SMs in the device. This is useful for cases such as
