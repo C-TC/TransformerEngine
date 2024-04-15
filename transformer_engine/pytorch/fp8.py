@@ -40,6 +40,7 @@ def get_default_fp8_recipe() -> DelayedScaling:
     return DelayedScaling()
 
 
+# CTC: three modes for FP8, E4M3, E5M2, and Hybrid(fw:E4M3, bw:E5M2).
 def get_fp8_te_dtype(
     fp8_recipe: DelayedScaling, fprop_tensor: bool = True
 ) -> tex.DType:
@@ -179,6 +180,7 @@ class FP8GlobalStateManager:
         fp8_meta: Dict[str, Any],
         fp8_weights: Optional[List[torch.Tensor]] = None,
     ) -> None:
+        # Good explanations in comments.
         """
         The amax reduction process happens completely outside the FP8 modules.
         To participate in the reduction, the only role played by a module is
@@ -336,9 +338,11 @@ class FP8GlobalStateManager:
 
             # Retrieve autocast specific args and concat amaxes.
             recipe, group = cls.autocast_arguments[autocast_key]
+            # CTC: concatenate amaxes. amax_buffer is a list of tensors.
             contiguous_amax = torch.cat(amax_buffer)
 
             # Reduction.
+            # CTC: concatenate buffer so only 1 AR for tensors in an entry of global_amax_buffer.
             if (recipe.reduce_amax
                 and torch.distributed.is_initialized()
                 and torch.distributed.get_world_size(group=group) > 1):
@@ -350,6 +354,7 @@ class FP8GlobalStateManager:
                               or callable(recipe.scaling_factor_compute_algo))
 
             if not unfused_update:
+                # CTC: fused update, if default amax_compute_algo and scaling_factor_compute_algo
                 tex.fused_amax_and_scale_update_after_reduction(
                     contiguous_amax,
                     cls.global_amax_history_buffer[buffer_key],
@@ -367,9 +372,11 @@ class FP8GlobalStateManager:
                     cls.global_scale_buffer[buffer_key],
                     cls.global_scale_inv_buffer[buffer_key],
                 ):
+                    # CTC: unfused update.
                     _amax_and_scale_update(
                         amax_history, scale, scale_inv, get_fp8_max(recipe, forward), recipe)
 
+    # CTC: this method is only called with dummy input? So not used?
     @classmethod
     def add_tensor_for_bwd_reduction_multi_grad_hook(cls, tensor):
         """Add tensor to list for multi grad hook."""
@@ -491,6 +498,7 @@ class FP8GlobalStateManager:
         fp8_meta["scaling_fwd"].scale_inv = fp8_meta["updated_scale_inv_fwd"]
 
 
+# CTC: experimental FP8 model initialization. Model only holds FP8 parameters.
 @contextmanager
 def fp8_model_init(enabled: bool = True) -> None:
     """
@@ -527,6 +535,7 @@ def fp8_model_init(enabled: bool = True) -> None:
         FP8GlobalStateManager.FP8_PARAMETERS = _fp8_parameters # pylint: disable=used-before-assignment
 
 
+# CTC: fp8 auto cast
 @contextmanager
 def fp8_autocast(
     enabled: bool = True,
@@ -617,6 +626,7 @@ def _default_sf_compute(
     margin: int,
 ) -> torch.Tensor:
     """Default function to convert amax to scaling factor."""
+    # CTC: scale factor computation.
     sf = (fp8_max / amax) / (2 ** margin)
     sf = torch.where(amax > 0.0, sf, scale)
     sf = torch.where(torch.isfinite(amax), sf, scale)
@@ -632,6 +642,7 @@ def _compute_amax_and_update_history(
 
     if callable(amax_compute_algo):
         amax = amax_compute_algo(amax_history)
+        # CTC: update amax history, set first row to zero.
         amax_history = _update_amax_history(amax_history)
         return amax_history, amax
     return _default_get_amax_and_update_history(

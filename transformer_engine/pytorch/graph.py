@@ -341,6 +341,7 @@ def _make_graphed_callables(
                 bwd_graph.replay()
 
                 if ctx.is_first_module:
+                    # CTC: Reduce and update FP8 tensors in backward. But only for cuda graph?
                     FP8GlobalStateManager.reduce_and_update_fp8_tensors(forward=False)
 
                 # Input args that didn't require grad expect a None gradient.

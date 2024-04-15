@@ -298,6 +298,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
                         FP8GlobalStateManager.global_amax_history_buffer[buffer_key][pos] = (
                             self.fp8_meta[meta_key].amax_history)
 
+    # CTC: setup meta tensors for FP8, to be added to FP8GlobalStateManager global buffer. 
     def set_meta_tensor(self, fwd: bool) -> None:
         """Init scales and amaxes for fwd | bwd."""
         fp8_meta_tensor_key = "scaling_fwd" if fwd else "scaling_bwd"
@@ -313,6 +314,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
             self.fp8_meta["num_gemms"] * 3 if fwd else self.fp8_meta["num_gemms"] * 2
         )
 
+        # CTC: initialize scales and amaxes for FP8 tensors in FP32.
         self.fp8_meta[fp8_meta_tensor_key] = tex.FP8TensorMeta()
         self.fp8_meta[fp8_meta_tensor_key].scale = torch.ones(
             num_fp8_tensors, dtype=torch.float32, device="cuda"
@@ -566,6 +568,7 @@ class TransformerEngineBaseModule(torch.nn.Module, ABC):
             self.fp8_initialized = False
             return
 
+    # CTC: entrance for FP8 autocast
     @contextmanager
     def prepare_forward(
         self,

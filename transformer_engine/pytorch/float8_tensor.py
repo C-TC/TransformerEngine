@@ -68,6 +68,7 @@ class _FromFloat8Func(torch.autograd.Function):
         return grad, None
 
 
+# CTC: update FP8 parameters in forward after optimizer step
 def post_optimizer_step_fwd_amax_reduction(param: Float8Tensor) -> None:
     """Amax scale and update when there is at least 1 trainable FP8 parameter."""
     param_id = id(param._data)
